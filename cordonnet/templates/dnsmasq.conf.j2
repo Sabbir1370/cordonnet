@@ -1,0 +1,24 @@
+interface={{ interface }}
+bind-interfaces
+dhcp-range={{ dhcp.start }},{{ dhcp.end }},255.255.255.0,24h
+dhcp-option=3,{{ gateway }}
+dhcp-option=6,{{ gateway }}
+domain=cordonnet
+local=/cordonnet/
+{% if not internet.enabled %}
+no-resolv
+address=/#/
+{% endif %}
+# MAC filtering
+{% if security.mode == "whitelist" %}
+# Whitelist mode: only these MACs get an IP
+{% for entry in security.whitelist %}
+dhcp-host={{ entry.mac }}{% if entry.name %},{{ entry.name }}{% endif %}
+{% endfor %}
+dhcp-ignore=tag:!known
+{% else %}
+# Normal mode: blacklist only, ignore the listed MACs
+{% for entry in security.blacklist %}
+dhcp-host={{ entry.mac }},ignore
+{% endfor %}
+{% endif %}

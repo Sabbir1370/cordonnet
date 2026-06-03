@@ -1,0 +1,110 @@
+# ============================================================
+#  CordonNet – Single‑Interface Virtual AP Cheat Sheet
+# ============================================================
+#
+#  REQUIREMENTS: Python venv must be active (source venv/bin/activate)
+#  ROOT COMMANDS: use sudo with the full venv Python path
+#  NON-ROOT COMMANDS: just use 'cordonnet'
+#  (After package installation, you can replace the long form
+#   with 'sudo cordonnet ...' if it's in the system PATH.)
+
+# ---------- HOTSPOT LIFECYCLE (root) ----------
+
+# Start virtual hotspot with internet sharing (auto‑NAT)
+sudo $(which python) -m cordonnet.main hotspot start
+
+# Start virtual hotspot WITHOUT internet (isolated lab)
+sudo $(which python) -m cordonnet.main hotspot start --isolated
+
+# Stop the hotspot and fully restore normal Wi‑Fi
+sudo $(which python) -m cordonnet.main hotspot stop
+
+# Restart the hotspot (preserves current mode)
+sudo $(which python) -m cordonnet.main hotspot restart
+sudo $(which python) -m cordonnet.main hotspot restart --isolated
+
+
+# ---------- HOTSPOT SETTINGS (non‑root) ----------
+
+# Change SSID (1–32 characters)
+cordonnet hotspot set-ssid "MyNetwork"
+
+# Change Wi‑Fi password (8–63 printable ASCII)
+cordonnet hotspot set-password "new_password123"
+
+# Change the base Wi‑Fi interface (run once after install if needed)
+cordonnet hotspot set-interface wlp1s0
+
+# Switch access control mode (persistent)
+#   normal    = blacklist only (anyone except blacklisted)
+#   whitelist = only whitelisted MACs can connect
+cordonnet hotspot mode normal
+cordonnet hotspot mode whitelist
+
+
+# ---------- WHITELIST MANAGEMENT (non‑root) ----------
+
+# Add a MAC to the whitelist (optional --name for label)
+cordonnet hotspot whitelist-add aa:bb:cc:dd:ee:ff
+cordonnet hotspot whitelist-add 11:22:33:44:55:66 --name "John's Phone"
+
+# Remove a MAC from the whitelist
+cordonnet hotspot whitelist-remove aa:bb:cc:dd:ee:ff
+
+# Display the whitelist
+cordonnet hotspot whitelist-list
+
+
+# ---------- BLACKLIST MANAGEMENT (non‑root) ----------
+
+# Add a MAC to the blacklist (optional --name)
+cordonnet hotspot blacklist-add 00:11:22:33:44:55
+cordonnet hotspot blacklist-add 66:77:88:99:aa:bb --name "Unknown Device"
+
+# Remove a MAC from the blacklist
+cordonnet hotspot blacklist-remove 00:11:22:33:44:55
+
+# Display the blacklist
+cordonnet hotspot blacklist-list
+
+
+# ---------- CLIENT MONITORING (non‑root) ----------
+
+# List all currently connected clients (IP, MAC, hostname, first seen)
+cordonnet clients list
+
+# Look up a specific client by IP or MAC
+cordonnet clients lookup 192.168.50.10
+cordonnet clients lookup aa:bb:cc:dd:ee:ff
+
+
+# ---------- CONFIGURATION & STATUS (non‑root) ----------
+
+# Show current configuration (YAML)
+cordonnet config show
+
+# Validate configuration file
+cordonnet config validate
+
+# Show full hotspot status (running services, mode, clients, etc.)
+cordonnet status
+
+
+# ---------- HARDWARE CHECK (non‑root) ----------
+
+# Check if your Wi‑Fi card supports virtual AP mode
+cordonnet detect
+
+
+# ============================================================
+# NOTES
+# ============================================================
+# - The hotspot uses a virtual interface (cord-ap0) on the same
+#   physical Wi‑Fi card, so your internet connection stays alive.
+# - Internet sharing is automatic when you start without --isolated.
+# - Ensure your base interface (default wlp1s0) has an active
+#   internet connection for sharing to work.
+# - MAC filtering is applied by dnsmasq; changes take effect on
+#   next hotspot restart.
+# - Use 'cordonnet hotspot set-interface <name>' to change the
+#   base interface without editing the config file manually.

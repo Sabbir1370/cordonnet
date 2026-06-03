@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cordonnet"
+version = "0.1.0"
+description = "Modern Linux hotspot and network management utility"
+requires-python = ">=3.12"
+dependencies = [
+    "typer>=0.9",
+    "rich>=13.0",
+    "pyyaml>=6.0",
+    "pydantic>=2.0",
+    "psutil>=5.9",
+    "jinja2>=3.1"
+]
+
+[project.scripts]
+cordonnet = "cordonnet.main:app"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["cordonnet", "cordonnet.*"]
