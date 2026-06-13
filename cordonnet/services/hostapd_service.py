@@ -20,17 +20,20 @@ class HostapdService:
         self.systemd = SystemdServiceManager()
         self.virtual_iface = VIRTUAL_IFACE
 
-    def _get_current_channel(self, physical_iface: str) -> str:
+    def _get_current_channel(self, physical_iface: str):
+        """Return (channel, hw_mode) matching the physical interface frequency."""
         try:
             out = run_sudo_checked(["iw", "dev", physical_iface, "info"])
             match = re.search(r'channel\s+(\d+)', out)
             if match:
                 channel = match.group(1)
-                logger.info("Detected channel %s on %s.", channel, physical_iface)
-                return channel
+                hw_mode = "a" if int(channel) >= 36 else "g"
+                logger.info("Detected channel %s (%s GHz) on %s.",
+                            channel, "5" if hw_mode == "a" else "2.4", physical_iface)
+                return channel, hw_mode
         except Exception as e:
-            logger.warning("Could not detect channel on %s: %s. Defaulting to 6.", physical_iface, e)
-        return "6"
+            logger.warning("Could not detect channel on %s: %s. Defaulting to ch6/2.4GHz.", physical_iface, e)
+        return "6", "g"
 
     def _iface_exists(self) -> bool:
         try:
@@ -76,28 +79,47 @@ class HostapdService:
                           self.virtual_iface, "type", "__ap"])
         logger.info("Created virtual AP interface %s on %s.", self.virtual_iface, physical_iface)
 
-    def generate_config(self, config: AppConfig, channel: str) -> str:
+    def generate_config(self, config: AppConfig, channel: str, hw_mode: str) -> str:
         template = self.env.get_template("hostapd.conf.j2")
         rendered = template.render(
             interface=self.virtual_iface,
             ssid=config.ssid,
             password=config.password,
             security=config.security,
-            channel=channel
+            channel=channel,
+            hw_mode=hw_mode
         )
-        # Verify the channel actually made it into the rendered config.
-        # If the Jinja2 template has channel hardcoded, patch it here.
+        # Safety patch: ensure channel and hw_mode match reality
         if f"channel={channel}" not in rendered:
-            logger.warning(
-                "Template did not render channel=%s — patching config directly.", channel
-            )
+            logger.warning("Patching channel=%s into config.", channel)
             rendered = re.sub(r'(?m)^channel=\d+', f'channel={channel}', rendered)
             if f"channel={channel}" not in rendered:
                 rendered += f"\nchannel={channel}"
+        if f"hw_mode={hw_mode}" not in rendered:
+            logger.warning("Patching hw_mode=%s into config.", hw_mode)
+            rendered = re.sub(r'(?m)^hw_mode=\w+', f'hw_mode={hw_mode}', rendered)
+            if f"hw_mode={hw_mode}" not in rendered:
+                rendered += f"\nhw_mode={hw_mode}"
         return rendered
 
+    def _ensure_nm_conf(self) -> None:
+        """Write the NetworkManager unmanaged-devices conf if not already present."""
+        conf_path = Path("/etc/NetworkManager/conf.d/cordonnet.conf")
+        if conf_path.exists():
+            return
+        nm_conf = "[keyfile]\nunmanaged-devices=interface-name:cord-ap0\n"
+        try:
+            # Write via tee so sudo can create the file
+            run_sudo_checked(["bash", "-c",
+                f"printf '%s' {nm_conf!r} > {conf_path}"])
+            run_sudo_checked(["systemctl", "reload", "NetworkManager"])
+            logger.info("Created %s and reloaded NetworkManager.", conf_path)
+        except Exception as e:
+            logger.warning("Could not write NM conf: %s — falling back to nmcli.", e)
+
     def start(self, config: AppConfig) -> None:
-        channel = self._get_current_channel(config.interface)
+        self._ensure_nm_conf()
+        channel, hw_mode = self._get_current_channel(config.interface)
 
         # Create the virtual interface BEFORE telling NM anything.
         # NM will see the new interface and try to manage it — we immediately
@@ -105,12 +127,12 @@ class HostapdService:
         # setting wlp1s0 unmanaged kills your existing internet connection.
         self.create_virtual_ap(config.interface)
 
-        # Immediately set cord-ap0 unmanaged so NM doesn't fight hostapd.
-        # This must happen before hostapd starts, otherwise NM grabs wpa_supplicant
-        # on cord-ap0 and hostapd loses the interface 10 seconds later.
+        # NM is permanently configured to ignore cord-ap0 via
+        # /etc/NetworkManager/conf.d/cordonnet.conf (unmanaged-devices=interface-name:cord-ap0).
+        # The runtime nmcli call is kept as a fallback in case the conf file is missing.
         self._set_nm_unmanaged(self.virtual_iface)
 
-        content = self.generate_config(config, channel)
+        content = self.generate_config(config, channel, hw_mode)
         CONF_FILE.parent.mkdir(parents=True, exist_ok=True)
         CONF_FILE.write_text(content)
         logger.debug("hostapd config written to %s:\n%s", CONF_FILE, content)

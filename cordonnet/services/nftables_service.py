@@ -66,7 +66,7 @@ class NftablesService:
         # rp_filter=1 (default) drops packets where the source IP is not reachable
         # via the interface they arrived on — this kills NAT traffic from cord-ap0
         # because the kernel sees 192.168.50.x packets leaving wlp1s0 and rejects them.
-        for iface in ("cord-ap0", outgoing_interface):
+        for iface in ("cord-ap0", outgoing_interface, "all"):
             try:
                 run_sudo_checked(["sysctl", "-w", f"net.ipv4.conf.{iface}.rp_filter=0"])
             except Exception as e:
@@ -91,11 +91,45 @@ class NftablesService:
             logger.warning("Could not reset ip_forward.")
 
         # Restore rp_filter to default (1) on both interfaces
-        for iface in (outgoing_interface, "cord-ap0"):
+        for iface in (outgoing_interface, "cord-ap0", "all"):
             try:
                 run_sudo_checked(["sysctl", "-w", f"net.ipv4.conf.{iface}.rp_filter=1"])
             except Exception:
                 pass
+
+    @staticmethod
+    def enable_isolation(outgoing_interface: str, subnet: str) -> None:
+        """
+        Explicitly block AP-subnet traffic from reaching the internet via
+        the physical interface. This is required because Docker's iptables-nft
+        'nat' table has an unconditional 'oifname wlp1s0 masquerade' rule that
+        will NAT and forward AP traffic even when CordonNet itself never
+        enabled internet sharing. A bare filter table with a drop rule at
+        priority -1 (before Docker's filter/nat tables run) ensures isolation
+        actually holds.
+        """
+        NftablesService._ensure_table()
+
+        # Forward chain at priority -1 so it evaluates before Docker's rules
+        try:
+            run_sudo_checked(["nft", "add", "chain", "ip", TABLE_NAME, CHAIN_FORWARD,
+                              "{ type filter hook forward priority -1; policy accept; }"])
+        except ShellError:
+            pass
+
+        # Drop any traffic from the AP subnet destined out the physical interface
+        drop_rule = f"ip saddr {subnet} oifname \"{outgoing_interface}\" drop"
+        try:
+            run_sudo_checked(["nft", "add", "rule", "ip", TABLE_NAME, CHAIN_FORWARD, drop_rule])
+            logger.info("Isolation enabled: AP subnet traffic to %s is dropped.", outgoing_interface)
+        except ShellError:
+            logger.warning("Could not add isolation drop rule.")
+
+        # Isolated mode does not need ip_forward at all — keep it disabled
+        try:
+            run_sudo_checked(["sysctl", "-w", "net.ipv4.ip_forward=0"])
+        except ShellError:
+            pass
 
     @staticmethod
     def remove_all_cordonnet_rules() -> None:

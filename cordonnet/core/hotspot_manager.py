@@ -48,9 +48,13 @@ class HotspotManager:
             self.hostapd.start(self.config)
             started_hostapd = True
 
-            # 2. Assign gateway IP to virtual interface and bring it up
+            # 2. Assign gateway IP to virtual interface.
+            # hostapd brings cord-ap0 up internally — wait briefly for it to
+            # finish initialising before we assign the IP, otherwise the kernel
+            # returns EBUSY. We do NOT call ip link set up ourselves; hostapd
+            # already owns that and a second set-up races with it.
+            time.sleep(1)
             run_sudo_checked(["ip", "addr", "add", f"{self.config.gateway}/24", "dev", VIRTUAL_IFACE])
-            run_sudo_checked(["ip", "link", "set", VIRTUAL_IFACE, "up"])
             assigned_ip = True
 
             # 3. Start dnsmasq DHCP/DNS (temporarily reflect isolated flag in config)
@@ -62,8 +66,14 @@ class HotspotManager:
             finally:
                 self.config.internet.enabled = original_internet
 
-            # 4. NAT / internet sharing — only when NOT isolated
-            if not isolated:
+            # 4. NAT / internet sharing OR explicit isolation drop rule.
+            # Docker's iptables-nft 'nat' table has an unconditional
+            # 'oifname <phys> masquerade' rule that NATs AP traffic even when
+            # CordonNet never enables internet sharing — so isolated mode
+            # needs an explicit drop rule, not just "absence of accept".
+            if isolated:
+                self.nft.enable_isolation(self.config.interface, self.config.subnet)
+            else:
                 self.nft.enable_internet(self.config.interface, self.config.subnet)
 
             # Persist mode so stop() can behave correctly
@@ -97,9 +107,9 @@ class HotspotManager:
         # Stop dnsmasq
         self.dnsmasq.stop()
 
-        # Disable NAT only if we enabled it
-        if not was_isolated:
-            self.nft.disable_internet(self.config.interface, self.config.subnet)
+        # Remove the cordonnet nftables table regardless of mode —
+        # both enable_internet() and enable_isolation() create it.
+        self.nft.disable_internet(self.config.interface, self.config.subnet)
 
         # Remove gateway IP from virtual interface
         try:
@@ -115,5 +125,5 @@ class HotspotManager:
 
     def restart(self, isolated: bool = False) -> None:
         self.stop()
-        time.sleep(1)
+        time.sleep(2)   # give kernel time to fully release cord-ap0 before recreating
         self.start(isolated=isolated)
